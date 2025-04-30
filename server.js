@@ -1,145 +1,132 @@
 const express = require('express');
 const bodyParser = require('body-parser');
-const mysql = require('mysql2/promise');
-const bcrypt = require('bcrypt');
+const mysql = require('mysql2');
 const path = require('path');
-const dotenv = require('dotenv');
-const fs = require('fs');
-
-// Load environment variables
-dotenv.config();
-
-// Debug environment variables
-console.log('Environment variables:');
-console.log('DB_HOST:', process.env.DB_HOST);
-console.log('DB_USER:', process.env.DB_USER);
-console.log('DB_PASSWORD:', process.env.DB_PASSWORD ? '********' : 'not set');
-console.log('DB_NAME:', process.env.DB_NAME);
-
-// Fallback to hardcoded credentials if env vars are not available
-const dbConfig = {
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || 'ypur_password',
-  database: process.env.DB_NAME || 'login_app'
-};
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 
-// Middleware
 app.use(bodyParser.json());
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'Public')));
 
-// Create database pool for better performance
-let pool;
-
-async function initDatabase() {
-  try {
-    console.log('Connecting to MySQL with:', {
-      host: dbConfig.host,
-      user: dbConfig.user,
-      password: dbConfig.password ? '********' : 'not set'
-    });
-    
-    // First connect without database to create it if needed
-    const initialConnection = await mysql.createConnection({
-      host: dbConfig.host,
-      user: dbConfig.user,
-      password: dbConfig.password,
-      multipleStatements: true
-    });
-
-    console.log('Initial connection successful');
-    const dbName = dbConfig.database;
-    
-    // Create database and tables
-    await initialConnection.query(`
-      CREATE DATABASE IF NOT EXISTS ${dbName};
-      USE ${dbName};
-      CREATE TABLE IF NOT EXISTS users (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        username VARCHAR(50) UNIQUE,
-        password VARCHAR(255)
-      );
-    `);
-    
-    console.log(`Database '${dbName}' setup complete`);
-    await initialConnection.end();
-    
-    // Create connection pool with the database
-    pool = mysql.createPool({
-      host: dbConfig.host,
-      user: dbConfig.user,
-      password: dbConfig.password,
-      database: dbName,
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0
-    });
-    
-    console.log('Database connection pool created');
-  } catch (err) {
-    console.error('Database initialization error:', err);
-    process.exit(1);
-  }
-}
-
-// Routes
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+const connection = mysql.createConnection({
+    host: 'localhost',
+    user: 'root',
+    password: 'your_mysql_password'
 });
 
-// Register
-app.post('/api/register', async (req, res) => {
-  const { username, password } = req.body;
-  
-  try {
-    const hash = await bcrypt.hash(password, 10);
-    await pool.query(
-      'INSERT INTO users (username, password) VALUES (?, ?)',
-      [username, hash]
-    );
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Registration error:', error);
-    res.status(400).json({ error: 'Registration failed' });
-  }
+connection.connect(err => {
+    if (err) {
+        console.error('Error connecting to MySQL:', err);
+        return;
+    }
+    console.log('Connected to MySQL database');
+    
+    connection.query('CREATE DATABASE IF NOT EXISTS task_manager', err => {
+        if (err) {
+            console.error('Error creating database:', err);
+            return;
+        }
+        console.log('Database task_manager created or already exists');
+        
+        connection.query('USE task_manager', err => {
+            if (err) {
+                console.error('Error using database:', err);
+                return;
+            }
+            
+            const createTableQuery = `
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    text VARCHAR(255) NOT NULL,
+                    completed BOOLEAN DEFAULT false
+                )
+            `;
+            
+            connection.query(createTableQuery, err => {
+                if (err) {
+                    console.error('Error creating tasks table:', err);
+                } else {
+                    console.log('Tasks table created or already exists');
+                }
+            });
+        });
+    });
 });
 
-// Login
-app.post('/api/login', async (req, res) => {
-  const { username, password } = req.body;
-  
-  try {
-    const [rows] = await pool.query(
-      'SELECT * FROM users WHERE username = ?', 
-      [username]
-    );
+app.get('/tasks', (req, res) => {
+    connection.query('SELECT * FROM tasks ORDER BY id DESC', (err, results) => {
+        if (err) {
+            console.error('Error fetching tasks:', err);
+            return res.status(500).json({ error: 'Failed to fetch tasks' });
+        }
+        res.json(results);
+    });
+});
+
+app.post('/tasks', (req, res) => {
+    const { text, completed } = req.body;
     
-    if (rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+    if (!text) {
+        return res.status(400).json({ error: 'Task text is required' });
     }
     
-    const match = await bcrypt.compare(password, rows[0].password);
-    if (!match) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-    
-    res.json({ success: true, username: rows[0].username });
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
+    const query = 'INSERT INTO tasks (text, completed) VALUES (?, ?)';
+    connection.query(query, [text, completed || false], (err, result) => {
+        if (err) {
+            console.error('Error adding task:', err);
+            return res.status(500).json({ error: 'Failed to add task' });
+        }
+        
+        res.status(201).json({ 
+            id: result.insertId,
+            text,
+            completed: completed || false
+        });
+    });
 });
 
-// Initialize database and start server
-async function startServer() {
-  await initDatabase();
-  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-}
+app.put('/tasks/:id', (req, res) => {
+    const taskId = req.params.id;
+    const { completed } = req.body;
+    
+    if (completed === undefined) {
+        return res.status(400).json({ error: 'Completed status is required' });
+    }
+    
+    const query = 'UPDATE tasks SET completed = ? WHERE id = ?';
+    connection.query(query, [completed, taskId], (err, result) => {
+        if (err) {
+            console.error('Error updating task:', err);
+            return res.status(500).json({ error: 'Failed to update task' });
+        }
+        
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Task not found' });
+        }
+        
+        res.json({ id: taskId, completed });
+    });
+});
 
-startServer().catch(err => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
+app.delete('/tasks/:id', (req, res) => {
+    const taskId = req.params.id;
+    
+    const query = 'DELETE FROM tasks WHERE id = ?';
+    connection.query(query, [taskId], (err, result) => {
+        if (err) {
+            console.error('Error deleting task:', err);
+            return res.status(500).json({ error: 'Failed to delete task' });
+        }
+        
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Task not found' });
+        }
+        
+        res.json({ message: 'Task deleted successfully' });
+    });
+});
+
+app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
 });

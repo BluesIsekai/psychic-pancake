@@ -1,96 +1,112 @@
 document.addEventListener('DOMContentLoaded', () => {
-    // Elements
-    const loginForm = document.getElementById('login');
-    const registerForm = document.getElementById('register');
-    const loginFormDiv = document.getElementById('loginForm');
-    const registerFormDiv = document.getElementById('registerForm');
-    const welcomeScreen = document.getElementById('welcomeScreen');
-    const welcomeUsername = document.getElementById('welcomeUsername');
-    const loginError = document.getElementById('loginError');
-    const registerError = document.getElementById('registerError');
-
-    // Check if logged in
-    const user = JSON.parse(sessionStorage.getItem('user'));
-    if (user) {
-        welcomeUsername.textContent = user.username;
-        loginFormDiv.style.display = 'none';
-        welcomeScreen.style.display = 'block';
+    const taskInput = document.getElementById('taskInput');
+    const addTaskBtn = document.getElementById('addTaskBtn');
+    const viewAllBtn = document.getElementById('viewAllBtn');
+    const taskList = document.getElementById('taskList');
+    
+    loadTasks();
+    
+    addTaskBtn.addEventListener('click', addTask);
+    viewAllBtn.addEventListener('click', loadTasks);
+    
+    async function addTask() {
+        const taskText = taskInput.value.trim();
+        if (taskText === '') return;
+        
+        try {
+            const response = await fetch('/tasks', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ text: taskText, completed: false })
+            });
+            
+            if (response.ok) {
+                taskInput.value = '';
+                loadTasks();
+            } else {
+                console.error('Failed to add task');
+            }
+        } catch (error) {
+            console.error('Error adding task:', error);
+        }
     }
-
-    // Form navigation
-    document.getElementById('showRegister').onclick = (e) => {
-        e.preventDefault();
-        loginFormDiv.style.display = 'none';
-        registerFormDiv.style.display = 'block';
-    };
-
-    document.getElementById('showLogin').onclick = (e) => {
-        e.preventDefault();
-        registerFormDiv.style.display = 'none';
-        loginFormDiv.style.display = 'block';
-    };
-
-    // Logout
-    document.getElementById('logoutBtn').onclick = () => {
-        sessionStorage.removeItem('user');
-        welcomeScreen.style.display = 'none';
-        loginFormDiv.style.display = 'block';
-    };
-
-    // Login
-    loginForm.onsubmit = async (e) => {
-        e.preventDefault();
-        const username = document.getElementById('loginUsername').value;
-        const password = document.getElementById('loginPassword').value;
-
+    
+    async function loadTasks() {
         try {
-            const response = await fetch('/api/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password })
-            });
-            const data = await response.json();
-
-            if (!response.ok) {
-                loginError.textContent = data.error;
-                return;
-            }
-
-            sessionStorage.setItem('user', JSON.stringify({ username: data.username }));
-            welcomeUsername.textContent = data.username;
-            loginFormDiv.style.display = 'none';
-            welcomeScreen.style.display = 'block';
-            loginForm.reset();
+            const response = await fetch('/tasks');
+            const tasks = await response.json();
+            
+            renderTasks(tasks);
         } catch (error) {
-            loginError.textContent = 'Server error';
+            console.error('Error loading tasks:', error);
         }
-    };
-
-    // Register
-    registerForm.onsubmit = async (e) => {
-        e.preventDefault();
-        const username = document.getElementById('registerUsername').value;
-        const password = document.getElementById('registerPassword').value;
-
+    }
+    
+    function renderTasks(tasks) {
+        taskList.innerHTML = '';
+        
+        tasks.forEach(task => {
+            const taskItem = document.createElement('li');
+            taskItem.className = `task-item ${task.completed ? 'completed' : ''}`;
+            taskItem.dataset.id = task.id;
+            
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'task-checkbox';
+            checkbox.checked = task.completed;
+            checkbox.addEventListener('change', () => toggleTaskStatus(task.id, checkbox.checked));
+            
+            const taskText = document.createElement('span');
+            taskText.className = 'task-text';
+            taskText.textContent = task.text;
+            
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'delete-btn';
+            deleteBtn.textContent = 'Delete';
+            deleteBtn.addEventListener('click', () => deleteTask(task.id));
+            
+            taskItem.appendChild(checkbox);
+            taskItem.appendChild(taskText);
+            taskItem.appendChild(deleteBtn);
+            taskList.appendChild(taskItem);
+        });
+    }
+    
+    async function toggleTaskStatus(taskId, completed) {
         try {
-            const response = await fetch('/api/register', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password })
+            const response = await fetch(`/tasks/${taskId}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ completed })
             });
-            const data = await response.json();
-
-            if (!response.ok) {
-                registerError.textContent = data.error;
-                return;
+            
+            if (response.ok) {
+                loadTasks();
+            } else {
+                console.error('Failed to update task');
             }
-
-            registerFormDiv.style.display = 'none';
-            loginFormDiv.style.display = 'block';
-            registerForm.reset();
-            loginError.textContent = 'Registration successful! Please login.';
         } catch (error) {
-            registerError.textContent = 'Server error';
+            console.error('Error updating task:', error);
         }
-    };
+    }
+    
+    async function deleteTask(taskId) {
+        try {
+            const response = await fetch(`/tasks/${taskId}`, {
+                method: 'DELETE'
+            });
+            
+            if (response.ok) {
+                loadTasks();
+            } else {
+                console.error('Failed to delete task');
+            }
+        } catch (error) {
+            console.error('Error deleting task:', error);
+        }
+    }
 });
